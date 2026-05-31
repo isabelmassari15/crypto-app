@@ -5,9 +5,11 @@ import ta
 import plotly.graph_objects as go
 import numpy as np
 
+from sklearn.ensemble import RandomForestClassifier
+
 st.set_page_config(layout="wide")
 
-st.title("🧠 AI TRADING BOT PRO (ULTIMATE STABLE)")
+st.title("🧠 AI TRADING BOT PRO — STABLE ENGINE")
 
 # ======================
 # INPUT
@@ -16,7 +18,7 @@ asset = st.selectbox("Asset", ["BTCUSDT", "ETHUSDT"])
 timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h"])
 
 # ======================
-# DATA BINANCE
+# DATA
 # ======================
 url = f"https://api.binance.com/api/v3/klines?symbol={asset}&interval={timeframe}&limit=800"
 data = requests.get(url).json()
@@ -32,17 +34,16 @@ for col in ["open","high","low","close","volume"]:
     df[col] = df[col].astype(float)
 
 # ======================
-# INDICATORI
+# INDICATORS (NO DROPNA QUI)
 # ======================
 df["ma10"] = df["close"].rolling(10).mean()
 df["ma20"] = df["close"].rolling(20).mean()
+
 df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
 
 macd = ta.trend.MACD(df["close"])
 df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
-
-df = df.replace([np.inf, -np.inf], np.nan)
 
 # ======================
 # TARGET
@@ -52,23 +53,31 @@ df["target"] = (df["future"] > df["close"]).astype(int)
 
 features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
 
-df_clean = df[features + ["target"]].dropna()
-
-X = df_clean[features]
-y = df_clean["target"]
+# ======================
+# ML DATASET (SEPARATO)
+# ======================
+df_ml = df[features + ["target"]].copy()
+df_ml = df_ml.replace([np.inf, -np.inf], np.nan).dropna()
 
 # ======================
-# ML O FALLBACK
+# SAFE INITIALIZATION
 # ======================
-if len(df_clean) < 80:
+df["ml_signal"] = np.nan
+df["ml_prob_up"] = np.nan
 
-    st.warning("⚠️ Dataset piccolo → modalità fallback attiva")
+# ======================
+# MODEL OR FALLBACK
+# ======================
+if len(df_ml) < 60:
+
+    st.warning("⚠️ Fallback attivo (mercato instabile o pochi dati)")
 
     df["ml_signal"] = (df["ma10"] > df["ma20"]).astype(int)
     df["ml_prob_up"] = df["ml_signal"] * 100
 
 else:
-    from sklearn.ensemble import RandomForestClassifier
+    X = df_ml[features]
+    y = df_ml["target"]
 
     model = RandomForestClassifier(
         n_estimators=60,
@@ -77,65 +86,31 @@ else:
 
     model.fit(X, y)
 
-    df.loc[df_clean.index, "ml_signal"] = model.predict(X)
-    df.loc[df_clean.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
+    df.loc[df_ml.index, "ml_signal"] = model.predict(X)
+    df.loc[df_ml.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
 
 # ======================
-# PULIZIA SOLO PER ML
+# FILL SAFE (IMPORTANTISSIMO)
 # ======================
-df = df.replace([np.inf, -np.inf], np.nan)
-
-# ======================
-# ML O FALLBACK
-# ======================
-if len(df_clean) < 80:
-
-    st.warning("⚠️ Dataset piccolo → fallback attivo")
-
-    df["ml_signal"] = (df["ma10"] > df["ma20"]).astype(int)
-
-    df["ml_prob_up"] = df["ml_signal"] * 100
-
-else:
-    from sklearn.ensemble import RandomForestClassifier
-
-    model = RandomForestClassifier(
-        n_estimators=60,
-        random_state=42
-    )
-
-    model.fit(X, y)
-
-    df.loc[df_clean.index, "ml_signal"] = model.predict(X)
-    df.loc[df_clean.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
-
+df["ml_signal"] = df["ml_signal"].ffill().fillna(0)
+df["ml_prob_up"] = df["ml_prob_up"].ffill().fillna(50)
 
 # ======================
-# SICUREZZA FINALE (FIX CRASH)
+# REMOVE ONLY FINAL NULLS SAFELY
 # ======================
-df = df.dropna(subset=["ml_signal", "ml_prob_up"])
-
-if len(df) == 0:
-    st.error("❌ Nessun dato valido per mostrare segnali")
-    st.stop()
-
-# ======================
-# OUTPUT SICURO
-# ======================
-up = df["ml_prob_up"].iloc[-1]
-signal = df["ml_signal"].iloc[-1]
+df = df.dropna(subset=["close", "time"])
 
 # ======================
 # OUTPUT
 # ======================
 up = df["ml_prob_up"].iloc[-1]
-signal = df["ml_signal"].iloc[-1]
+signal = int(df["ml_signal"].iloc[-1])
 
 st.metric("📈 Probabilità salita", f"{up:.1f}%")
 st.metric("🎯 Segnale", "BUY" if signal == 1 else "SELL")
 
 # ======================
-# SIMULATORE
+# SIMULATOR
 # ======================
 capital = 1000
 position = 0
@@ -159,7 +134,7 @@ for i in range(len(df)):
 df["equity"] = equity
 
 # ======================
-# GRAFICO CANDLE
+# CHART
 # ======================
 fig = go.Figure()
 
@@ -206,16 +181,17 @@ st.line_chart(df["equity"])
 st.subheader("📘 Legenda")
 
 st.markdown("""
-🧠 AI BOT:
-- usa ML se dati sufficienti
-- fallback semplice se dati pochi
+🧠 AI SYSTEM:
+- usa ML se possibile
+- fallback trend se dati pochi
+- mai crash
 
-📊 Segnali:
+📊 SEGNALE:
 - BUY = trend positivo
 - SELL = trend negativo
 
-💰 Simulatore:
-- compra/vende automaticamente virtuale
+💰 SIMULAZIONE:
+- trading virtuale automatico
 
-⚠️ Non è consulenza finanziaria
+⚠️ NON è consulenza finanziaria
 """)
