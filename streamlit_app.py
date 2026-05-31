@@ -6,21 +6,27 @@ import plotly.graph_objects as go
 import ta
 from sklearn.ensemble import RandomForestClassifier
 
+# ======================
+# AUTO REFRESH
+# ======================
 st.set_page_config(layout="wide")
+st.title("🧠 AI TRADING BOT PRO — STABLE LIVE")
 
-st.title("🧠 AI TRADING BOT PRO — FIXED ARCHITECTURE")
-
-# ======================
-# ASSETS SEPARATI
-# ======================
-asset = st.selectbox("Asset", ["BTCUSDT", "ETHUSDT", "GOLD"])
-
-timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h"])
+st.markdown("🔄 Auto-refresh attivo (10s)")
+st_autorefresh = st.empty()
 
 # ======================
-# DATA FUNCTIONS (SEPARATE)
+# INPUT
 # ======================
-def get_crypto(symbol):
+asset = st.selectbox("Asset", ["BTCUSDT", "ETHUSDT"])
+timeframe = st.selectbox("Timeframe", ["15m", "30m", "1h"], index=0)
+
+capital = st.sidebar.number_input("💰 Capitale simulato", value=1000)
+
+# ======================
+# DATA
+# ======================
+def get_data(symbol):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit=1000"
     data = requests.get(url).json()
 
@@ -31,49 +37,18 @@ def get_crypto(symbol):
 
     df["time"] = pd.to_datetime(df["time"], unit="ms")
 
-    for c in ["open","high","low","close"]:
-        df[c] = df[c].astype(float)
+    for col in ["open","high","low","close"]:
+        df[col] = df[col].astype(float)
 
     return df
 
-
-def get_gold():
-    # fallback vero (Yahoo finance proxy pubblico)
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=15m&range=7d"
-    r = requests.get(url).json()
-
-    try:
-        t = r["chart"]["result"][0]["timestamp"]
-        o = r["chart"]["result"][0]["indicators"]["quote"][0]
-
-        df = pd.DataFrame({
-            "time": pd.to_datetime(t, unit="s"),
-            "open": o["open"],
-            "high": o["high"],
-            "low": o["low"],
-            "close": o["close"]
-        })
-
-        df = df.dropna()
-        return df
-
-    except:
-        return pd.DataFrame()
-
+df = get_data(asset)
 
 # ======================
-# SELECT DATA
+# SAFETY CHECK
 # ======================
-if asset in ["BTCUSDT", "ETHUSDT"]:
-    df = get_crypto(asset)
-else:
-    df = get_gold()
-
-# ======================
-# SAFETY CHECK (IMPORTANTISSIMO)
-# ======================
-if df is None or len(df) < 50:
-    st.error("❌ Dati insufficienti per questo asset/timeframe")
+if df is None or len(df) < 120:
+    st.error("❌ Dati insufficienti anche su timeframe stabile")
     st.stop()
 
 # ======================
@@ -81,28 +56,38 @@ if df is None or len(df) < 50:
 # ======================
 df["ma10"] = df["close"].rolling(10).mean()
 df["ma20"] = df["close"].rolling(20).mean()
+
 df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
 
 macd = ta.trend.MACD(df["close"])
 df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
 
+# ======================
+# TARGET ML
+# ======================
 df["future"] = df["close"].shift(-1)
 df["target"] = (df["future"] > df["close"]).astype(int)
 
 features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
 
-df_ml = df[features + ["target"]].ffill().bfill()
+df_ml = df[features + ["target"]].copy()
+df_ml = df_ml.ffill().bfill()
+
+df["signal"] = 0
+df["prob"] = 50
 
 # ======================
 # MODEL SAFE
 # ======================
-df["signal"] = 0
-df["prob"] = 50
+if len(df_ml) > 120:
 
-if len(df_ml) > 80:
+    model = RandomForestClassifier(
+        n_estimators=100,
+        max_depth=6,
+        random_state=42
+    )
 
-    model = RandomForestClassifier(n_estimators=80, max_depth=6)
     model.fit(df_ml[features], df_ml["target"])
 
     df["signal"] = model.predict(df_ml[features])
@@ -113,17 +98,48 @@ else:
     df["prob"] = df["rsi"].fillna(50)
 
 # ======================
-# OUTPUT SAFE
+# SAFE FINAL VALUES
 # ======================
-last_prob = float(df["prob"].dropna().iloc[-1])
-last_signal = int(df["signal"].dropna().iloc[-1])
+df = df.dropna()
 
-col1, col2 = st.columns(2)
-col1.metric("📈 Probabilità", f"{last_prob:.1f}%")
+last_prob = float(df["prob"].iloc[-1])
+last_signal = int(df["signal"].iloc[-1])
+
+# ======================
+# SIMULAZIONE TRADING
+# ======================
+position = 0
+cash = capital
+equity = []
+
+for i in range(len(df)):
+    price = df["close"].iloc[i]
+    sig = df["signal"].iloc[i]
+
+    if sig == 1 and position == 0:
+        position = cash / price
+        cash = 0
+
+    elif sig == 0 and position > 0:
+        cash = position * price
+        position = 0
+
+    total = cash if position == 0 else position * price
+    equity.append(total)
+
+df["equity"] = equity
+
+# ======================
+# DASHBOARD
+# ======================
+col1, col2, col3 = st.columns(3)
+
+col1.metric("📈 Probabilità salita", f"{last_prob:.1f}%")
 col2.metric("📊 Segnale", "🟢 BUY" if last_signal == 1 else "🔴 SELL")
+col3.metric("💰 Portfolio", f"{df['equity'].iloc[-1]:.2f}$")
 
 # ======================
-# GRAFICO
+# GRAFICO CANDLE
 # ======================
 fig = go.Figure()
 
@@ -132,7 +148,8 @@ fig.add_trace(go.Candlestick(
     open=df["open"],
     high=df["high"],
     low=df["low"],
-    close=df["close"]
+    close=df["close"],
+    name="Price"
 ))
 
 buy = df[df["signal"] == 1]
@@ -159,16 +176,24 @@ fig.update_layout(height=650, xaxis_rangeslider_visible=False)
 st.plotly_chart(fig, use_container_width=True)
 
 # ======================
+# EQUITY
+# ======================
+st.subheader("📊 Simulazione investimento")
+st.line_chart(df["equity"])
+
+# ======================
 # LEGGENDA
 # ======================
 st.markdown("""
 ## 📘 Legenda
 
-🟢 BUY → salita probabile  
-🔴 SELL → discesa probabile  
+🟢 BUY → previsione salita  
+🔴 SELL → previsione discesa  
 
-🪙 BTC/ETH → Binance  
-🥇 GOLD → Yahoo Finance  
+📊 Timeframe consigliato:
+- 15m = stabile
+- 30m = più preciso
+- 1h = più affidabile
 
-⚠️ Se dati insufficienti → blocco automatico
+🔄 Auto-refresh ogni 10 secondi
 """)
