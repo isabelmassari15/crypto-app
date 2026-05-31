@@ -80,7 +80,50 @@ else:
     df.loc[df_clean.index, "ml_signal"] = model.predict(X)
     df.loc[df_clean.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
 
-df = df.dropna()
+# ======================
+# PULIZIA SOLO PER ML
+# ======================
+df = df.replace([np.inf, -np.inf], np.nan)
+
+# ======================
+# ML O FALLBACK
+# ======================
+if len(df_clean) < 80:
+
+    st.warning("⚠️ Dataset piccolo → fallback attivo")
+
+    df["ml_signal"] = (df["ma10"] > df["ma20"]).astype(int)
+
+    df["ml_prob_up"] = df["ml_signal"] * 100
+
+else:
+    from sklearn.ensemble import RandomForestClassifier
+
+    model = RandomForestClassifier(
+        n_estimators=60,
+        random_state=42
+    )
+
+    model.fit(X, y)
+
+    df.loc[df_clean.index, "ml_signal"] = model.predict(X)
+    df.loc[df_clean.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
+
+
+# ======================
+# SICUREZZA FINALE (FIX CRASH)
+# ======================
+df = df.dropna(subset=["ml_signal", "ml_prob_up"])
+
+if len(df) == 0:
+    st.error("❌ Nessun dato valido per mostrare segnali")
+    st.stop()
+
+# ======================
+# OUTPUT SICURO
+# ======================
+up = df["ml_prob_up"].iloc[-1]
+signal = df["ml_signal"].iloc[-1]
 
 # ======================
 # OUTPUT
