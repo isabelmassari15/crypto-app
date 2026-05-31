@@ -8,10 +8,10 @@ from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
 
-st.title("🧠 AI TRADING BOT PRO (STABILE + ML)")
+st.title("🧠 AI TRADING BOT PRO (STABILE + ML FIXED)")
 
 # ======================
-# ASSET + TIMEFRAME
+# INPUT
 # ======================
 asset = st.selectbox("Asset", ["BTCUSDT", "ETHUSDT"])
 timeframe = st.selectbox("Timeframe", ["1m", "5m", "30m", "1h"])
@@ -44,17 +44,16 @@ macd = ta.trend.MACD(df["close"])
 df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
 
-# pulizia base
 df = df.replace([np.inf, -np.inf], np.nan)
 
 # ======================
-# LABEL (FUTURO)
+# TARGET FUTURO
 # ======================
 df["future"] = df["close"].shift(-1)
 df["target"] = (df["future"] > df["close"]).astype(int)
 
 # ======================
-# DATASET ML PULITO
+# DATASET ML PULITO (FIX CRASH)
 # ======================
 features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
 
@@ -62,6 +61,10 @@ df_ml = df[features + ["target"]].dropna()
 
 X = df_ml[features]
 y = df_ml["target"]
+
+if len(X) < 50:
+    st.error("❌ Dati insufficienti per addestrare il modello")
+    st.stop()
 
 # ======================
 # MODELLO ML
@@ -73,19 +76,25 @@ model = RandomForestClassifier(
 
 model.fit(X, y)
 
+# ======================
+# PREDIZIONE SICURA
+# ======================
 df.loc[df_ml.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
 df.loc[df_ml.index, "ml_signal"] = model.predict(X)
 
 df = df.dropna()
 
 # ======================
-# PROBABILITÀ ULTIMA
+# OUTPUT
 # ======================
 up = df["ml_prob_up"].iloc[-1]
-last_signal = df["ml_signal"].iloc[-1]
+signal = df["ml_signal"].iloc[-1]
+
+st.metric("📈 Probabilità salita", f"{up:.1f}%")
+st.metric("🎯 Segnale", "BUY" if signal == 1 else "SELL")
 
 # ======================
-# SIMULATORE CAPITALE
+# SIMULATORE
 # ======================
 capital = 1000
 position = 0
@@ -93,13 +102,13 @@ equity = []
 
 for i in range(len(df)):
     price = df["close"].iloc[i]
-    signal = df["ml_signal"].iloc[i]
+    sig = df["ml_signal"].iloc[i]
 
-    if signal == 1 and position == 0:
+    if sig == 1 and position == 0:
         position = capital / price
         capital = 0
 
-    elif signal == 0 and position > 0:
+    elif sig == 0 and position > 0:
         capital = position * price
         position = 0
 
@@ -107,19 +116,6 @@ for i in range(len(df)):
     equity.append(total)
 
 df["equity"] = equity
-
-# ======================
-# DASHBOARD
-# ======================
-col1, col2 = st.columns(2)
-
-with col1:
-    st.metric("📈 Probabilità salita", f"{up:.1f}%")
-
-with col2:
-    st.metric("💰 Capitale simulato", f"{df['equity'].iloc[-1]:.2f} $")
-
-st.metric("🎯 Segnale", "BUY" if last_signal == 1 else "SELL")
 
 # ======================
 # GRAFICO CANDLE
@@ -132,10 +128,9 @@ fig.add_trace(go.Candlestick(
     high=df["high"],
     low=df["low"],
     close=df["close"],
-    name="Candles"
+    name="Price"
 ))
 
-# BUY / SELL
 buy = df[df["ml_signal"] == 1]
 sell = df[df["ml_signal"] == 0]
 
@@ -168,10 +163,10 @@ st.line_chart(df["equity"])
 # ======================
 # LEGENDA
 # ======================
-st.subheader("🧠 Legenda AI")
+st.subheader("📘 Legenda")
 
 st.markdown("""
-🧠 MODELLO ML:
+🧠 AI ML:
 - Random Forest su indicatori tecnici
 - predice direzione prossima candela
 
