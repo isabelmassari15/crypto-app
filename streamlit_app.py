@@ -30,7 +30,13 @@ df["close"] = df["close"].astype(float)
 # ===== PREZZO LIVE =====
 ticker_url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
 price_data = requests.get(ticker_url).json()
-live_price = float(price_data["price"])
+
+if "price" in price_data:
+    live_price = float(price_data["price"])
+else:
+    st.error("Errore nel recupero prezzo Binance")
+    st.write(price_data)
+    live_price = df["close"].iloc[-1]  # fallback
 
 st.metric("💰 Prezzo LIVE", f"{live_price:.2f} $")
 
