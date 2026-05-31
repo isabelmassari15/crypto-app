@@ -4,12 +4,11 @@ import requests
 import ta
 import plotly.graph_objects as go
 import numpy as np
-
 from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
 
-st.title("🧠 AI TRADING BOT PRO — STABLE ENGINE")
+st.title("🧠 AI TRADING BOT PRO — ULTRA STABLE V2")
 
 # ======================
 # INPUT
@@ -34,7 +33,7 @@ for col in ["open","high","low","close","volume"]:
     df[col] = df[col].astype(float)
 
 # ======================
-# INDICATORS (NO DROPNA QUI)
+# INDICATORS
 # ======================
 df["ma10"] = df["close"].rolling(10).mean()
 df["ma20"] = df["close"].rolling(20).mean()
@@ -45,37 +44,32 @@ macd = ta.trend.MACD(df["close"])
 df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
 
-# ======================
-# TARGET
-# ======================
 df["future"] = df["close"].shift(-1)
 df["target"] = (df["future"] > df["close"]).astype(int)
 
 features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
 
 # ======================
-# ML DATASET (SEPARATO)
+# ML DATASET
 # ======================
 df_ml = df[features + ["target"]].copy()
 df_ml = df_ml.replace([np.inf, -np.inf], np.nan).dropna()
 
-# ======================
-# SAFE INITIALIZATION
-# ======================
 df["ml_signal"] = np.nan
 df["ml_prob_up"] = np.nan
 
 # ======================
-# MODEL OR FALLBACK
+# MODEL / FALLBACK
 # ======================
 if len(df_ml) < 60:
 
-    st.warning("⚠️ Fallback attivo (mercato instabile o pochi dati)")
+    st.warning("⚠️ Fallback attivo (dati insufficienti)")
 
     df["ml_signal"] = (df["ma10"] > df["ma20"]).astype(int)
     df["ml_prob_up"] = df["ml_signal"] * 100
 
 else:
+
     X = df_ml[features]
     y = df_ml["target"]
 
@@ -90,21 +84,32 @@ else:
     df.loc[df_ml.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
 
 # ======================
-# FILL SAFE (IMPORTANTISSIMO)
+# SAFE FILL (IMPORTANTE)
 # ======================
 df["ml_signal"] = df["ml_signal"].ffill().fillna(0)
 df["ml_prob_up"] = df["ml_prob_up"].ffill().fillna(50)
 
 # ======================
-# REMOVE ONLY FINAL NULLS SAFELY
+# SAFE OUTPUT (NO CRASH MAI)
 # ======================
-df = df.dropna(subset=["close", "time"])
+valid_prob = df["ml_prob_up"].dropna()
+valid_sig = df["ml_signal"].dropna()
 
-# ======================
-# OUTPUT
-# ======================
-up = df["ml_prob_up"].iloc[-1]
-signal = int(df["ml_signal"].iloc[-1])
+if len(valid_prob) == 0:
+    up = 50
+else:
+    up = float(valid_prob.iloc[-1])
+
+if len(valid_sig) == 0:
+    signal = 0
+else:
+    signal = int(valid_sig.iloc[-1])
+
+# safety finale
+if np.isnan(up):
+    up = 50
+if np.isnan(signal):
+    signal = 0
 
 st.metric("📈 Probabilità salita", f"{up:.1f}%")
 st.metric("🎯 Segnale", "BUY" if signal == 1 else "SELL")
@@ -181,16 +186,16 @@ st.line_chart(df["equity"])
 st.subheader("📘 Legenda")
 
 st.markdown("""
-🧠 AI SYSTEM:
-- usa ML se possibile
-- fallback trend se dati pochi
-- mai crash
+🧠 AI:
+- ML se possibile
+- fallback se dati insufficienti
+- sempre output stabile
 
-📊 SEGNALE:
+📊 Segnali:
 - BUY = trend positivo
 - SELL = trend negativo
 
-💰 SIMULAZIONE:
+💰 Simulatore:
 - trading virtuale automatico
 
 ⚠️ NON è consulenza finanziaria
