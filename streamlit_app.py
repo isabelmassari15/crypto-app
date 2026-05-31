@@ -5,15 +5,15 @@ import requests
 import plotly.graph_objects as go
 import ta
 from sklearn.ensemble import RandomForestClassifier
+from streamlit_autorefresh import st_autorefresh
 
 # ======================
-# AUTO REFRESH
+# UI SETUP
 # ======================
 st.set_page_config(layout="wide")
-st.title("🧠 AI TRADING BOT PRO — STABLE LIVE")
+st.title("🧠 AI TRADING BOT PRO — STABLE ENGINE")
 
-st.markdown("🔄 Auto-refresh attivo (10s)")
-st_autorefresh = st.empty()
+st_autorefresh(interval=10000, key="refresh")
 
 # ======================
 # INPUT
@@ -24,39 +24,51 @@ timeframe = st.selectbox("Timeframe", ["15m", "30m", "1h"], index=0)
 capital = st.sidebar.number_input("💰 Capitale simulato", value=1000)
 
 # ======================
-# DATA
+# SAFE DATA FETCH
 # ======================
 def get_data(symbol):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit=1000"
-    data = requests.get(url).json()
 
-    df = pd.DataFrame(data, columns=[
-        "time","open","high","low","close","volume",
-        "c1","c2","c3","c4","c5","c6"
-    ])
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
 
-    df["time"] = pd.to_datetime(df["time"], unit="ms")
+        if not isinstance(data, list):
+            st.error(f"API Error: {data}")
+            return pd.DataFrame()
 
-    for col in ["open","high","low","close"]:
-        df[col] = df[col].astype(float)
+        df = pd.DataFrame(data, columns=[
+            "time","open","high","low","close","volume",
+            "c1","c2","c3","c4","c5","c6"
+        ])
 
-    return df
+        df["time"] = pd.to_datetime(df["time"], unit="ms")
 
+        for c in ["open","high","low","close"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+        df = df.dropna()
+
+        return df
+
+    except Exception as e:
+        st.error(f"Connessione error: {e}")
+        return pd.DataFrame()
+
+# ======================
+# LOAD DATA
+# ======================
 df = get_data(asset)
 
-# ======================
-# SAFETY CHECK
-# ======================
-if df is None or len(df) < 120:
-    st.error("❌ Dati insufficienti anche su timeframe stabile")
+if df.empty or len(df) < 80:
+    st.warning("⚠️ Dati insufficienti → riprovo al prossimo refresh")
     st.stop()
 
 # ======================
-# INDICATORS
+# FEATURES
 # ======================
 df["ma10"] = df["close"].rolling(10).mean()
 df["ma20"] = df["close"].rolling(20).mean()
-
 df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
 
 macd = ta.trend.MACD(df["close"])
@@ -64,49 +76,61 @@ df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
 
 # ======================
-# TARGET ML
+# TARGET
 # ======================
 df["future"] = df["close"].shift(-1)
 df["target"] = (df["future"] > df["close"]).astype(int)
 
-features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
+features = ["ma10","ma20","rsi","macd","macd_signal"]
 
-df_ml = df[features + ["target"]].copy()
-df_ml = df_ml.ffill().bfill()
-
-df["signal"] = 0
-df["prob"] = 50
+df_ml = df[features + ["target"]].copy().ffill().bfill()
 
 # ======================
 # MODEL SAFE
 # ======================
-if len(df_ml) > 120:
+df["signal"] = 0
+df["prob"] = 50
+
+valid_data = df_ml.dropna()
+
+if len(valid_data) > 80:
 
     model = RandomForestClassifier(
-        n_estimators=100,
+        n_estimators=120,
         max_depth=6,
         random_state=42
     )
 
-    model.fit(df_ml[features], df_ml["target"])
+    model.fit(valid_data[features], valid_data["target"])
 
-    df["signal"] = model.predict(df_ml[features])
-    df["prob"] = model.predict_proba(df_ml[features])[:, 1] * 100
+    df["signal"] = model.predict(valid_data[features])
+    df["prob"] = model.predict_proba(valid_data[features])[:, 1] * 100
 
 else:
+    # fallback intelligente (NON rompe mai)
     df["signal"] = (df["ma10"] > df["ma20"]).astype(int)
     df["prob"] = df["rsi"].fillna(50)
 
 # ======================
-# SAFE FINAL VALUES
+# CLEAN
 # ======================
 df = df.dropna()
+df["signal"] = df["signal"].fillna(0)
+df["prob"] = df["prob"].fillna(50)
 
-last_prob = float(df["prob"].iloc[-1])
 last_signal = int(df["signal"].iloc[-1])
+last_prob = float(df["prob"].iloc[-1])
 
 # ======================
-# SIMULAZIONE TRADING
+# METRICS
+# ======================
+col1, col2 = st.columns(2)
+
+col1.metric("📈 Probabilità salita", f"{last_prob:.1f}%")
+col2.metric("📊 Segnale", "🟢 BUY" if last_signal == 1 else "🔴 SELL")
+
+# ======================
+# SIMULAZIONE
 # ======================
 position = 0
 cash = capital
@@ -130,16 +154,7 @@ for i in range(len(df)):
 df["equity"] = equity
 
 # ======================
-# DASHBOARD
-# ======================
-col1, col2, col3 = st.columns(3)
-
-col1.metric("📈 Probabilità salita", f"{last_prob:.1f}%")
-col2.metric("📊 Segnale", "🟢 BUY" if last_signal == 1 else "🔴 SELL")
-col3.metric("💰 Portfolio", f"{df['equity'].iloc[-1]:.2f}$")
-
-# ======================
-# GRAFICO CANDLE
+# CHART
 # ======================
 fig = go.Figure()
 
@@ -148,8 +163,7 @@ fig.add_trace(go.Candlestick(
     open=df["open"],
     high=df["high"],
     low=df["low"],
-    close=df["close"],
-    name="Price"
+    close=df["close"]
 ))
 
 buy = df[df["signal"] == 1]
@@ -159,7 +173,7 @@ fig.add_trace(go.Scatter(
     x=buy["time"],
     y=buy["low"],
     mode="markers",
-    marker=dict(color="green", size=10, symbol="triangle-up"),
+    marker=dict(color="green", size=9, symbol="triangle-up"),
     name="BUY"
 ))
 
@@ -167,7 +181,7 @@ fig.add_trace(go.Scatter(
     x=sell["time"],
     y=sell["high"],
     mode="markers",
-    marker=dict(color="red", size=10, symbol="triangle-down"),
+    marker=dict(color="red", size=9, symbol="triangle-down"),
     name="SELL"
 ))
 
@@ -187,13 +201,15 @@ st.line_chart(df["equity"])
 st.markdown("""
 ## 📘 Legenda
 
-🟢 BUY → previsione salita  
-🔴 SELL → previsione discesa  
+🟢 BUY → trend rialzista  
+🔴 SELL → trend ribassista  
 
 📊 Timeframe consigliato:
 - 15m = stabile
 - 30m = più preciso
 - 1h = più affidabile
 
-🔄 Auto-refresh ogni 10 secondi
+💰 Portfolio = simulazione capitale
+
+⚠️ Nessun sistema è perfetto nel trading reale
 """)
