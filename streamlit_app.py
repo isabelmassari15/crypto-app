@@ -3,12 +3,12 @@ import pandas as pd
 import requests
 import ta
 import plotly.graph_objects as go
-from sklearn.ensemble import RandomForestClassifier
 import numpy as np
+from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
 
-st.title("🧠 AI TRADING PRO MAX (ML + Simulator)")
+st.title("🧠 AI TRADING BOT PRO (STABILE + ML)")
 
 # ======================
 # ASSET + TIMEFRAME
@@ -37,36 +37,52 @@ for col in ["open","high","low","close","volume"]:
 # ======================
 df["ma10"] = df["close"].rolling(10).mean()
 df["ma20"] = df["close"].rolling(20).mean()
+
 df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
 
 macd = ta.trend.MACD(df["close"])
 df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
 
-df = df.dropna()
+# pulizia base
+df = df.replace([np.inf, -np.inf], np.nan)
 
 # ======================
-# LABEL (TARGET FUTURO)
+# LABEL (FUTURO)
 # ======================
 df["future"] = df["close"].shift(-1)
 df["target"] = (df["future"] > df["close"]).astype(int)
 
 # ======================
-# FEATURES
+# DATASET ML PULITO
 # ======================
 features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
 
-X = df[features]
-y = df["target"]
+df_ml = df[features + ["target"]].dropna()
+
+X = df_ml[features]
+y = df_ml["target"]
 
 # ======================
 # MODELLO ML
 # ======================
-model = RandomForestClassifier(n_estimators=100)
+model = RandomForestClassifier(
+    n_estimators=100,
+    random_state=42
+)
+
 model.fit(X, y)
 
-df["ml_prob_up"] = model.predict_proba(X)[:,1] * 100
-df["ml_signal"] = model.predict(X)
+df.loc[df_ml.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
+df.loc[df_ml.index, "ml_signal"] = model.predict(X)
+
+df = df.dropna()
+
+# ======================
+# PROBABILITÀ ULTIMA
+# ======================
+up = df["ml_prob_up"].iloc[-1]
+last_signal = df["ml_signal"].iloc[-1]
 
 # ======================
 # SIMULATORE CAPITALE
@@ -93,10 +109,17 @@ for i in range(len(df)):
 df["equity"] = equity
 
 # ======================
-# OUTPUT
+# DASHBOARD
 # ======================
-st.metric("📈 Probabilità salita", f"{df['ml_prob_up'].iloc[-1]:.1f}%")
-st.metric("💰 Capitale simulato", f"{df['equity'].iloc[-1]:.2f} $")
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric("📈 Probabilità salita", f"{up:.1f}%")
+
+with col2:
+    st.metric("💰 Capitale simulato", f"{df['equity'].iloc[-1]:.2f} $")
+
+st.metric("🎯 Segnale", "BUY" if last_signal == 1 else "SELL")
 
 # ======================
 # GRAFICO CANDLE
@@ -108,10 +131,11 @@ fig.add_trace(go.Candlestick(
     open=df["open"],
     high=df["high"],
     low=df["low"],
-    close=df["close"]
+    close=df["close"],
+    name="Candles"
 ))
 
-# BUY / SELL ML
+# BUY / SELL
 buy = df[df["ml_signal"] == 1]
 sell = df[df["ml_signal"] == 0]
 
@@ -136,26 +160,25 @@ fig.update_layout(xaxis_rangeslider_visible=False)
 st.plotly_chart(fig, use_container_width=True)
 
 # ======================
-# EQUITY CURVE
+# EQUITY
 # ======================
 st.subheader("💰 Simulatore Capitale")
-
 st.line_chart(df["equity"])
 
 # ======================
 # LEGENDA
 # ======================
-st.subheader("🧠 AI INFO")
+st.subheader("🧠 Legenda AI")
 
 st.markdown("""
-🧠 ML MODEL:
-- Random Forest impara dai dati storici
-- predice probabilità prossima candela
+🧠 MODELLO ML:
+- Random Forest su indicatori tecnici
+- predice direzione prossima candela
 
 💰 SIMULATORE:
-- compra quando AI dice BUY
-- vende quando AI dice SELL
-- calcola crescita capitale
+- compra quando BUY
+- vende quando SELL
+- simula crescita capitale
 
 ⚠️ NON è consulenza finanziaria
 """)
