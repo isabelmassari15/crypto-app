@@ -19,7 +19,7 @@ timeframe = st.selectbox("Timeframe", ["1m", "5m", "30m", "1h"])
 # ======================
 # BINANCE DATA
 # ======================
-url = f"https://api.binance.com/api/v3/klines?symbol={asset}&interval={timeframe}&limit=500"
+url = f"https://api.binance.com/api/v3/klines?symbol={asset}&interval={timeframe}&limit=1000"
 data = requests.get(url).json()
 
 df = pd.DataFrame(data, columns=[
