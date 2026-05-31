@@ -3,33 +3,40 @@ import pandas as pd
 import requests
 import ta
 import plotly.graph_objects as go
+import time
 
 st.set_page_config(layout="wide")
 
-st.title("🚀 CRYPTO AI BOT PRO")
+st.title("🚀 CRYPTO AI BOT PRO LIVE")
+
+# ===== AUTO REFRESH =====
+st.caption("Aggiornamento automatico ogni 10 secondi")
+time.sleep(1)
 
 # ===== SCELTA ASSET =====
 symbol = st.selectbox("Scegli Crypto", ["BTCUSDT", "ETHUSDT"])
 
-# ===== DATI (CoinGecko) =====
-coin_id = "bitcoin" if symbol == "BTCUSDT" else "ethereum"
-from binance.client import Client
+# ===== DATI REALI BINANCE =====
+url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=200"
+data = requests.get(url).json()
 
-client = Client("", "")  # senza API = solo dati
-
-klines = client.get_klines(symbol=symbol, interval="1m", limit=200)
-
-df = pd.DataFrame(klines, columns=[
+df = pd.DataFrame(data, columns=[
     "time","open","high","low","close","volume",
     "close_time","qav","num_trades","taker_base","taker_quote","ignore"
 ])
 
 df["close"] = df["close"].astype(float)
 
+# ===== PREZZO LIVE =====
+ticker_url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+price_data = requests.get(ticker_url).json()
+live_price = float(price_data["price"])
+
+st.metric("💰 Prezzo LIVE", f"{live_price:.2f} $")
+
 # ===== INDICATORI =====
 df["ma20"] = df["close"].rolling(20).mean()
 df["ma50"] = df["close"].rolling(50).mean()
-
 df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
 
 macd = ta.trend.MACD(df["close"])
@@ -40,7 +47,7 @@ bb = ta.volatility.BollingerBands(df["close"])
 df["bb_high"] = bb.bollinger_hband()
 df["bb_low"] = bb.bollinger_lband()
 
-# ===== SCORE =====
+# ===== SCORE AI =====
 df["score"] = 0
 
 df.loc[df["ma20"] > df["ma50"], "score"] += 2
@@ -70,6 +77,10 @@ def get_signal(score):
 
 df["signal"] = df["score"].apply(get_signal)
 
+# ===== ULTIMO SEGNALE =====
+last_signal = df["signal"].iloc[-1]
+last_score = df["score"].iloc[-1]
+
 # ===== GRAFICO =====
 fig = go.Figure()
 
@@ -77,12 +88,29 @@ fig.add_trace(go.Scatter(y=df["close"], name="Prezzo"))
 fig.add_trace(go.Scatter(y=df["ma20"], name="MA20"))
 fig.add_trace(go.Scatter(y=df["ma50"], name="MA50"))
 
+# FRECCE BUY/SELL
+buy_signals = df[df["signal"].str.contains("BUY")]
+sell_signals = df[df["signal"].str.contains("SELL")]
+
+fig.add_trace(go.Scatter(
+    x=buy_signals.index,
+    y=buy_signals["close"],
+    mode="markers",
+    name="BUY",
+    marker=dict(symbol="triangle-up", size=10)
+))
+
+fig.add_trace(go.Scatter(
+    x=sell_signals.index,
+    y=sell_signals["close"],
+    mode="markers",
+    name="SELL",
+    marker=dict(symbol="triangle-down", size=10)
+))
+
 st.plotly_chart(fig, use_container_width=True)
 
 # ===== OUTPUT =====
-last_signal = df["signal"].iloc[-1]
-last_score = df["score"].iloc[-1]
-
 st.subheader("📊 ANALISI AI")
 
 col1, col2 = st.columns(2)
@@ -104,25 +132,17 @@ else:
 st.subheader("📘 LEGENDA")
 
 st.markdown("""
-- **STRONG BUY** → Alta probabilità salita (trend + momentum forti)
-- **BUY** → Buon momento per entrare ma non perfetto
-- **HOLD** → Mercato incerto
-- **SELL** → Possibile discesa
-- **STRONG SELL** → Alta probabilità discesa
+- **STRONG BUY** → forte probabilità salita
+- **BUY** → buona opportunità
+- **HOLD** → mercato incerto
+- **SELL** → possibile discesa
+- **STRONG SELL** → forte probabilità discesa
 
-⚠️ ATTENZIONE:
-- Nessun sistema è sicuro al 100%
-- Usa sempre gestione del rischio
+Indicatori usati:
+- MA20/MA50 → trend
+- RSI → ipercomprato/ipervenduto
+- MACD → momentum
+- Bollinger → volatilità
+
+⚠️ Nessun bot è sicuro al 100%
 """)
-
-# ===== BINANCE MANUALE =====
-st.subheader("💰 Trading Manuale (Opzionale)")
-
-api_key = st.text_input("API KEY Binance")
-api_secret = st.text_input("API SECRET Binance", type="password")
-
-if st.button("🟢 Compra"):
-    st.info("Ordine simulato (collega Binance per reale)")
-
-if st.button("🔴 Vendi"):
-    st.info("Ordine simulato (collega Binance per reale)")
