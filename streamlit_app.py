@@ -98,7 +98,10 @@ df["ml_prob_up"] = df["ml_prob_up"].ffill().fillna(50)
 # ======================
 # OUTPUT SICURO
 # ======================
-up = float(df["ml_prob_up"].iloc[-1])
+if "ml_prob_up" in df.columns and len(df["ml_prob_up"].dropna()) > 0:
+    up = float(df["ml_prob_up"].dropna().iloc[-1])
+else:
+    up = 50.0
 signal = int(df["ml_signal"].iloc[-1])
 
 st.metric("📈 Probabilità salita", f"{up:.1f}%")
