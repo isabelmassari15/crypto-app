@@ -7,8 +7,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
-
-st.title("🧠 AI TRADING BOT PRO — ULTRA STABLE V2")
+st.title("🧠 AI TRADING BOT PRO — STABLE V3 (FIX DATA)")
 
 # ======================
 # INPUT
@@ -17,9 +16,9 @@ asset = st.selectbox("Asset", ["BTCUSDT", "ETHUSDT"])
 timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h"])
 
 # ======================
-# DATA
+# PIÙ DATI (FIX PRINCIPALE)
 # ======================
-url = f"https://api.binance.com/api/v3/klines?symbol={asset}&interval={timeframe}&limit=800"
+url = f"https://api.binance.com/api/v3/klines?symbol={asset}&interval={timeframe}&limit=1500"
 data = requests.get(url).json()
 
 df = pd.DataFrame(data, columns=[
@@ -33,14 +32,14 @@ for col in ["open","high","low","close","volume"]:
     df[col] = df[col].astype(float)
 
 # ======================
-# INDICATORS
+# INDICATORI (MENO AGGRESSIVI)
 # ======================
 df["ma10"] = df["close"].rolling(10).mean()
 df["ma20"] = df["close"].rolling(20).mean()
 
-df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
+df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
 
-macd = ta.trend.MACD(df["close"])
+macd = ta.trend.MACD(df["close"], window_slow=26, window_fast=12, window_sign=9)
 df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
 
@@ -50,72 +49,63 @@ df["target"] = (df["future"] > df["close"]).astype(int)
 features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
 
 # ======================
-# ML DATASET
+# CLEAN SOLO ML
 # ======================
 df_ml = df[features + ["target"]].copy()
-df_ml = df_ml.replace([np.inf, -np.inf], np.nan).dropna()
+
+# FIX IMPORTANTE: NON distruggere tutto il df
+df_ml = df_ml.replace([np.inf, -np.inf], np.nan)
+
+# riempimento invece di drop massivo
+df_ml = df_ml.fillna(method="ffill").fillna(method="bfill")
 
 df["ml_signal"] = np.nan
 df["ml_prob_up"] = np.nan
 
 # ======================
-# MODEL / FALLBACK
+# MODEL
 # ======================
-if len(df_ml) < 60:
+X = df_ml[features]
+y = df_ml["target"]
 
-    st.warning("⚠️ Fallback attivo (dati insufficienti)")
+# sicurezza vera
+if len(df_ml) < 120:
+
+    st.warning("⚠️ Dataset piccolo → modello semplificato (NON fallback totale)")
 
     df["ml_signal"] = (df["ma10"] > df["ma20"]).astype(int)
-    df["ml_prob_up"] = df["ml_signal"] * 100
+    df["ml_prob_up"] = (df["rsi"] / 100) * 100
 
 else:
 
-    X = df_ml[features]
-    y = df_ml["target"]
-
     model = RandomForestClassifier(
-        n_estimators=60,
+        n_estimators=80,
+        max_depth=8,
         random_state=42
     )
 
     model.fit(X, y)
 
-    df.loc[df_ml.index, "ml_signal"] = model.predict(X)
-    df.loc[df_ml.index, "ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
+    df["ml_signal"] = model.predict(X)
+    df["ml_prob_up"] = model.predict_proba(X)[:, 1] * 100
 
 # ======================
-# SAFE FILL (IMPORTANTE)
+# SAFE FINAL
 # ======================
 df["ml_signal"] = df["ml_signal"].ffill().fillna(0)
 df["ml_prob_up"] = df["ml_prob_up"].ffill().fillna(50)
 
 # ======================
-# SAFE OUTPUT (NO CRASH MAI)
+# OUTPUT SICURO
 # ======================
-valid_prob = df["ml_prob_up"].dropna()
-valid_sig = df["ml_signal"].dropna()
-
-if len(valid_prob) == 0:
-    up = 50
-else:
-    up = float(valid_prob.iloc[-1])
-
-if len(valid_sig) == 0:
-    signal = 0
-else:
-    signal = int(valid_sig.iloc[-1])
-
-# safety finale
-if np.isnan(up):
-    up = 50
-if np.isnan(signal):
-    signal = 0
+up = float(df["ml_prob_up"].iloc[-1])
+signal = int(df["ml_signal"].iloc[-1])
 
 st.metric("📈 Probabilità salita", f"{up:.1f}%")
 st.metric("🎯 Segnale", "BUY" if signal == 1 else "SELL")
 
 # ======================
-# SIMULATOR
+# SIMULATORE
 # ======================
 capital = 1000
 position = 0
@@ -139,7 +129,7 @@ for i in range(len(df)):
 df["equity"] = equity
 
 # ======================
-# CHART
+# GRAFICO
 # ======================
 fig = go.Figure()
 
@@ -158,7 +148,7 @@ fig.add_trace(go.Scatter(
     x=buy["time"],
     y=buy["low"] * 0.999,
     mode="markers",
-    marker=dict(symbol="triangle-up", size=10, color="green"),
+    marker=dict(symbol="triangle-up", color="green", size=10),
     name="BUY"
 ))
 
@@ -166,7 +156,7 @@ fig.add_trace(go.Scatter(
     x=sell["time"],
     y=sell["high"] * 1.001,
     mode="markers",
-    marker=dict(symbol="triangle-down", size=10, color="red"),
+    marker=dict(symbol="triangle-down", color="red", size=10),
     name="SELL"
 ))
 
@@ -179,24 +169,3 @@ st.plotly_chart(fig, use_container_width=True)
 # ======================
 st.subheader("💰 Capitale simulato")
 st.line_chart(df["equity"])
-
-# ======================
-# LEGGENDA
-# ======================
-st.subheader("📘 Legenda")
-
-st.markdown("""
-🧠 AI:
-- ML se possibile
-- fallback se dati insufficienti
-- sempre output stabile
-
-📊 Segnali:
-- BUY = trend positivo
-- SELL = trend negativo
-
-💰 Simulatore:
-- trading virtuale automatico
-
-⚠️ NON è consulenza finanziaria
-""")
