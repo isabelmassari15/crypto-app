@@ -57,7 +57,7 @@ df_ml = df[features + ["target"]].copy()
 df_ml = df_ml.replace([np.inf, -np.inf], np.nan)
 
 # riempimento invece di drop massivo
-df_ml = df_ml.fillna(method="ffill").fillna(method="bfill")
+df_ml = df_ml.ffill().bfill()
 
 df["ml_signal"] = np.nan
 df["ml_prob_up"] = np.nan
