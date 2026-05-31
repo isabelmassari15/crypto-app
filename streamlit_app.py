@@ -3,61 +3,40 @@ import pandas as pd
 import requests
 import ta
 import plotly.graph_objects as go
+from sklearn.ensemble import RandomForestClassifier
+import numpy as np
 
 st.set_page_config(layout="wide")
 
-st.title("🚀 AI TRADING BOT PRO (eToro Style)")
+st.title("🧠 AI TRADING PRO MAX (ML + Simulator)")
 
 # ======================
-# ASSET
+# ASSET + TIMEFRAME
 # ======================
-asset = st.selectbox("Scegli Asset", ["BTC", "ETH", "GOLD"])
-
-# ======================
-# DATA BTC / ETH
-# ======================
-if asset in ["BTC", "ETH"]:
-
-    coin_map = {
-        "BTC": "bitcoin",
-        "ETH": "ethereum"
-    }
-
-    coin_id = coin_map[asset]
-
-    # prezzo live
-    price_url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
-    live_price = requests.get(price_url).json()[coin_id]["usd"]
-
-    # storico
-    chart_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=7"
-    data = requests.get(chart_url).json()
-
-    df = pd.DataFrame(data["prices"], columns=["time", "close"])
-    df["time"] = pd.to_datetime(df["time"], unit="ms")
+asset = st.selectbox("Asset", ["BTCUSDT", "ETHUSDT"])
+timeframe = st.selectbox("Timeframe", ["1m", "5m", "30m", "1h"])
 
 # ======================
-# GOLD (semplice + stabile)
+# BINANCE DATA
 # ======================
-else:
-    # fallback stabile (simulazione realistica)
-    live_price = 2000  # oro approssimato stabile
+url = f"https://api.binance.com/api/v3/klines?symbol={asset}&interval={timeframe}&limit=500"
+data = requests.get(url).json()
 
-    df = pd.DataFrame({
-        "close": [live_price + i * 0.5 for i in range(200)]
-    })
+df = pd.DataFrame(data, columns=[
+    "time","open","high","low","close","volume",
+    "c1","c2","c3","c4","c5","c6"
+])
 
-# ======================
-# PREZZO LIVE
-# ======================
-st.metric("💰 Prezzo LIVE", f"{live_price:.2f} $")
+df["time"] = pd.to_datetime(df["time"], unit="ms")
+
+for col in ["open","high","low","close","volume"]:
+    df[col] = df[col].astype(float)
 
 # ======================
 # INDICATORI
 # ======================
+df["ma10"] = df["close"].rolling(10).mean()
 df["ma20"] = df["close"].rolling(20).mean()
-df["ma50"] = df["close"].rolling(50).mean()
-
 df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
 
 macd = ta.trend.MACD(df["close"])
@@ -67,126 +46,116 @@ df["macd_signal"] = macd.macd_signal()
 df = df.dropna()
 
 # ======================
-# AI SCORE
+# LABEL (TARGET FUTURO)
 # ======================
-df["score"] = 0
-
-df.loc[df["ma20"] > df["ma50"], "score"] += 2
-df.loc[df["ma20"] < df["ma50"], "score"] -= 2
-
-df.loc[df["rsi"] < 30, "score"] += 2
-df.loc[df["rsi"] > 70, "score"] -= 2
-
-df.loc[df["macd"] > df["macd_signal"], "score"] += 1
-df.loc[df["macd"] < df["macd_signal"], "score"] -= 1
+df["future"] = df["close"].shift(-1)
+df["target"] = (df["future"] > df["close"]).astype(int)
 
 # ======================
-# PROBABILITÀ (ETORO STYLE)
+# FEATURES
 # ======================
-df["prob_up"] = (df["score"] + 4) / 8 * 100
-df["prob_down"] = 100 - df["prob_up"]
+features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
 
-up = df["prob_up"].iloc[-1]
-down = df["prob_down"].iloc[-1]
-
-# ======================
-# SEGNALE
-# ======================
-def signal(score):
-    if score >= 3:
-        return "🟢 STRONG BUY"
-    elif score >= 1:
-        return "🟢 BUY"
-    elif score <= -3:
-        return "🔴 STRONG SELL"
-    elif score <= -1:
-        return "🔴 SELL"
-    else:
-        return "🟡 HOLD"
-
-df["signal"] = df["score"].apply(signal)
-
-last_signal = df["signal"].iloc[-1]
+X = df[features]
+y = df["target"]
 
 # ======================
-# ALERT CAMBIO
+# MODELLO ML
 # ======================
-if len(df) > 2:
-    if df["signal"].iloc[-1] != df["signal"].iloc[-2]:
-        st.warning(f"⚠️ CAMBIO SEGNALE: {df['signal'].iloc[-2]} → {last_signal}")
+model = RandomForestClassifier(n_estimators=100)
+model.fit(X, y)
 
-# ======================
-# UI PROBABILITÀ
-# ======================
-st.subheader("📊 Probabilità AI (stile eToro)")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.metric("📈 Salita", f"{up:.1f}%")
-
-with col2:
-    st.metric("📉 Discesa", f"{down:.1f}%")
-
-st.metric("🎯 Segnale", last_signal)
+df["ml_prob_up"] = model.predict_proba(X)[:,1] * 100
+df["ml_signal"] = model.predict(X)
 
 # ======================
-# GRAFICO CON FRECCE
+# SIMULATORE CAPITALE
+# ======================
+capital = 1000
+position = 0
+equity = []
+
+for i in range(len(df)):
+    price = df["close"].iloc[i]
+    signal = df["ml_signal"].iloc[i]
+
+    if signal == 1 and position == 0:
+        position = capital / price
+        capital = 0
+
+    elif signal == 0 and position > 0:
+        capital = position * price
+        position = 0
+
+    total = capital if position == 0 else position * price
+    equity.append(total)
+
+df["equity"] = equity
+
+# ======================
+# OUTPUT
+# ======================
+st.metric("📈 Probabilità salita", f"{df['ml_prob_up'].iloc[-1]:.1f}%")
+st.metric("💰 Capitale simulato", f"{df['equity'].iloc[-1]:.2f} $")
+
+# ======================
+# GRAFICO CANDLE
 # ======================
 fig = go.Figure()
 
-fig.add_trace(go.Scatter(
-    y=df["close"],
-    name="Price"
+fig.add_trace(go.Candlestick(
+    x=df["time"],
+    open=df["open"],
+    high=df["high"],
+    low=df["low"],
+    close=df["close"]
 ))
 
-fig.add_trace(go.Scatter(
-    y=df["ma20"],
-    name="MA20"
-))
+# BUY / SELL ML
+buy = df[df["ml_signal"] == 1]
+sell = df[df["ml_signal"] == 0]
 
 fig.add_trace(go.Scatter(
-    y=df["ma50"],
-    name="MA50"
-))
-
-# BUY points
-buy = df[df["prob_up"] > 65]
-
-# SELL points
-sell = df[df["prob_down"] > 65]
-
-fig.add_trace(go.Scatter(
-    x=buy.index,
-    y=buy["close"],
+    x=buy["time"],
+    y=buy["low"] * 0.999,
     mode="markers",
-    marker=dict(symbol="triangle-up", size=10),
+    marker=dict(symbol="triangle-up", size=10, color="green"),
     name="BUY"
 ))
 
 fig.add_trace(go.Scatter(
-    x=sell.index,
-    y=sell["close"],
+    x=sell["time"],
+    y=sell["high"] * 1.001,
     mode="markers",
-    marker=dict(symbol="triangle-down", size=10),
+    marker=dict(symbol="triangle-down", size=10, color="red"),
     name="SELL"
 ))
+
+fig.update_layout(xaxis_rangeslider_visible=False)
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ======================
+# EQUITY CURVE
+# ======================
+st.subheader("💰 Simulatore Capitale")
+
+st.line_chart(df["equity"])
+
+# ======================
 # LEGENDA
 # ======================
-st.subheader("📘 Legenda AI")
+st.subheader("🧠 AI INFO")
 
 st.markdown("""
-🟢 BUY → pressione rialzista  
-🔴 SELL → pressione ribassista  
-🟡 HOLD → mercato neutro  
+🧠 ML MODEL:
+- Random Forest impara dai dati storici
+- predice probabilità prossima candela
 
-📊 Probabilità:
-- derivata da trend + RSI + MACD
-- scala 0–100%
+💰 SIMULATORE:
+- compra quando AI dice BUY
+- vende quando AI dice SELL
+- calcola crescita capitale
 
-⚠️ Non è consulenza finanziaria
+⚠️ NON è consulenza finanziaria
 """)
