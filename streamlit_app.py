@@ -1,94 +1,43 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
 import yfinance as yf
-import ta
-import plotly.graph_objects as go
-from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
 
-st.set_page_config(page_title="AI Crypto Bot", layout="wide")
+st.set_page_config(page_title="Crypto App", layout="wide")
 
-st.title("📊 AI Trading Bot")
+st.title("📊 Crypto Dashboard")
 
-st.write("🔄 Analisi automatica in corso...")
+st.write("✅ App funzionante")
 
 # =========================
-# DATI
+# DATI SICURI
 # =========================
 @st.cache_data
-def get_data(symbol):
-    if symbol == "BTC":
-        df = yf.download("BTC-USD", period="3mo", interval="1h")
-    else:
-        df = yf.download("ETH-USD", period="3mo", interval="1h")
+def get_data(ticker):
+    df = yf.download(ticker, period="1mo", interval="1h")
 
-    df = df.reset_index()
-    df.rename(columns={
-        "Datetime": "time",
-        "Open": "open",
-        "High": "high",
-        "Low": "low",
-        "Close": "close",
-        "Volume": "volume"
-    }, inplace=True)
+    if df.empty:
+        return None
 
     return df
 
 # =========================
-# ANALISI
+# BTC
 # =========================
-def analyze(df):
-    df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
-    df["ma"] = df["close"].rolling(20).mean()
-    df = df.dropna()
+btc = get_data("BTC-USD")
 
-    df["target"] = np.where(df["close"].shift(-1) > df["close"], 1, 0)
-
-    X = df[["rsi", "ma"]]
-    y = df["target"]
-
-    model = RandomForestClassifier(n_estimators=100)
-    model.fit(X, y)
-
-    df["prob"] = model.predict_proba(X)[:, 1]
-
-    return df
+if btc is not None:
+    st.subheader("Bitcoin")
+    st.line_chart(btc["Close"])
+else:
+    st.error("Errore dati BTC")
 
 # =========================
-# SEGNALE
+# ETH
 # =========================
-def signal(df):
-    last = df.iloc[-1]
+eth = get_data("ETH-USD")
 
-    if last["prob"] > 0.6 and last["close"] > last["ma"]:
-        return "BUY"
-    elif last["prob"] < 0.4 and last["close"] < last["ma"]:
-        return "SELL"
-    else:
-        return "HOLD"
-
-# =========================
-# GRAFICO
-# =========================
-def plot(df, name):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["time"], y=df["close"], name=name))
-    return fig
-
-# =========================
-# RUN
-# =========================
-try:
-    btc = analyze(get_data("BTC"))
-    eth = analyze(get_data("ETH"))
-
-    st.subheader("📊 Segnali")
-
-    st.write("BTC:", signal(btc))
-    st.write("ETH:", signal(eth))
-
-    st.plotly_chart(plot(btc, "BTC"))
-    st.plotly_chart(plot(eth, "ETH"))
-
-except Exception as e:
-    st.error(f"Errore: {e}")
+if eth is not None:
+    st.subheader("Ethereum")
+    st.line_chart(eth["Close"])
+else:
+    st.error("Errore dati ETH")
