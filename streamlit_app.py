@@ -63,9 +63,15 @@ X = df_ml[features]
 y = df_ml["target"]
 
 if len(X) < 50:
-    st.error("❌ Dati insufficienti per addestrare il modello")
-    st.stop()
+    st.warning("⚠️ Pochi dati: aumento automatico sensibilità modello")
 
+    # fallback: riduci complessità
+    model = RandomForestClassifier(
+        n_estimators=30,
+        random_state=42
+    )
+
+    model.fit(X, y)
 # ======================
 # MODELLO ML
 # ======================
