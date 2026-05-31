@@ -102,7 +102,10 @@ if "ml_prob_up" in df.columns and len(df["ml_prob_up"].dropna()) > 0:
     up = float(df["ml_prob_up"].dropna().iloc[-1])
 else:
     up = 50.0
-signal = int(df["ml_signal"].iloc[-1])
+if "ml_signal" in df.columns and len(df["ml_signal"].dropna()) > 0:
+    signal = int(df["ml_signal"].dropna().iloc[-1])
+else:
+    signal = 0
 
 st.metric("📈 Probabilità salita", f"{up:.1f}%")
 st.metric("🎯 Segnale", "BUY" if signal == 1 else "SELL")
