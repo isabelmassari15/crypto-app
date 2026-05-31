@@ -5,15 +5,11 @@ import requests
 import plotly.graph_objects as go
 import ta
 from sklearn.ensemble import RandomForestClassifier
-from streamlit_autorefresh import st_autorefresh
+import time
 
-# ======================
-# UI SETUP
-# ======================
 st.set_page_config(layout="wide")
-st.title("🧠 AI TRADING BOT PRO — STABLE ENGINE")
 
-st_autorefresh(interval=10000, key="refresh")
+st.title("📱 AI TRADING — eToro STYLE PRO")
 
 # ======================
 # INPUT
@@ -24,7 +20,7 @@ timeframe = st.selectbox("Timeframe", ["15m", "30m", "1h"], index=0)
 capital = st.sidebar.number_input("💰 Capitale simulato", value=1000)
 
 # ======================
-# SAFE DATA FETCH
+# DATA
 # ======================
 def get_data(symbol):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit=1000"
@@ -34,7 +30,6 @@ def get_data(symbol):
         data = r.json()
 
         if not isinstance(data, list):
-            st.error(f"API Error: {data}")
             return pd.DataFrame()
 
         df = pd.DataFrame(data, columns=[
@@ -47,21 +42,18 @@ def get_data(symbol):
         for c in ["open","high","low","close"]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-        df = df.dropna()
+        return df.dropna()
 
-        return df
-
-    except Exception as e:
-        st.error(f"Connessione error: {e}")
+    except:
         return pd.DataFrame()
 
-# ======================
-# LOAD DATA
-# ======================
 df = get_data(asset)
 
+# ======================
+# SAFETY
+# ======================
 if df.empty or len(df) < 80:
-    st.warning("⚠️ Dati insufficienti → riprovo al prossimo refresh")
+    st.warning("⚠️ Dati insufficienti — riprovo al prossimo refresh")
     st.stop()
 
 # ======================
@@ -75,59 +67,56 @@ macd = ta.trend.MACD(df["close"])
 df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
 
-# ======================
-# TARGET
-# ======================
 df["future"] = df["close"].shift(-1)
 df["target"] = (df["future"] > df["close"]).astype(int)
 
 features = ["ma10","ma20","rsi","macd","macd_signal"]
 
-df_ml = df[features + ["target"]].copy().ffill().bfill()
+df_ml = df[features + ["target"]].ffill().bfill()
 
-# ======================
-# MODEL SAFE
-# ======================
 df["signal"] = 0
 df["prob"] = 50
 
-valid_data = df_ml.dropna()
+valid = df_ml.dropna()
 
-if len(valid_data) > 80:
+# ======================
+# MODEL
+# ======================
+if len(valid) > 80:
 
     model = RandomForestClassifier(
-        n_estimators=120,
+        n_estimators=100,
         max_depth=6,
         random_state=42
     )
 
-    model.fit(valid_data[features], valid_data["target"])
+    model.fit(valid[features], valid["target"])
 
-    df["signal"] = model.predict(valid_data[features])
-    df["prob"] = model.predict_proba(valid_data[features])[:, 1] * 100
+    df["signal"] = model.predict(valid[features])
+    df["prob"] = model.predict_proba(valid[features])[:, 1] * 100
 
 else:
-    # fallback intelligente (NON rompe mai)
     df["signal"] = (df["ma10"] > df["ma20"]).astype(int)
     df["prob"] = df["rsi"].fillna(50)
 
-# ======================
-# CLEAN
-# ======================
 df = df.dropna()
-df["signal"] = df["signal"].fillna(0)
-df["prob"] = df["prob"].fillna(50)
 
+# ======================
+# LAST VALUES
+# ======================
 last_signal = int(df["signal"].iloc[-1])
 last_prob = float(df["prob"].iloc[-1])
 
 # ======================
-# METRICS
+# UI eTORO STYLE
 # ======================
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
-col1.metric("📈 Probabilità salita", f"{last_prob:.1f}%")
+col1.metric("📈 Probabilità", f"{last_prob:.1f}%")
 col2.metric("📊 Segnale", "🟢 BUY" if last_signal == 1 else "🔴 SELL")
+col3.metric("💰 Capitale", f"{capital}$")
+
+st.caption("🔄 Aggiorna la pagina per refresh (Streamlit limit)")
 
 # ======================
 # SIMULAZIONE
@@ -154,7 +143,7 @@ for i in range(len(df)):
 df["equity"] = equity
 
 # ======================
-# CHART
+# GRAFICO
 # ======================
 fig = go.Figure()
 
@@ -173,7 +162,7 @@ fig.add_trace(go.Scatter(
     x=buy["time"],
     y=buy["low"],
     mode="markers",
-    marker=dict(color="green", size=9, symbol="triangle-up"),
+    marker=dict(color="green", size=10, symbol="triangle-up"),
     name="BUY"
 ))
 
@@ -181,7 +170,7 @@ fig.add_trace(go.Scatter(
     x=sell["time"],
     y=sell["high"],
     mode="markers",
-    marker=dict(color="red", size=9, symbol="triangle-down"),
+    marker=dict(color="red", size=10, symbol="triangle-down"),
     name="SELL"
 ))
 
@@ -192,24 +181,21 @@ st.plotly_chart(fig, use_container_width=True)
 # ======================
 # EQUITY
 # ======================
-st.subheader("📊 Simulazione investimento")
+st.subheader("📊 Portfolio simulato")
 st.line_chart(df["equity"])
 
 # ======================
 # LEGGENDA
 # ======================
 st.markdown("""
-## 📘 Legenda
+## 📘 Legenda eToro STYLE
 
 🟢 BUY → trend rialzista  
 🔴 SELL → trend ribassista  
 
-📊 Timeframe consigliato:
-- 15m = stabile
-- 30m = più preciso
-- 1h = più affidabile
+📊 Probabilità = forza del segnale  
+💰 Portfolio = simulazione capitale  
+📈 Candlestick = movimento reale mercato  
 
-💰 Portfolio = simulazione capitale
-
-⚠️ Nessun sistema è perfetto nel trading reale
+⚠️ Aggiornamento manuale (Streamlit limitazione)
 """)
