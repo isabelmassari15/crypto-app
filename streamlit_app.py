@@ -8,26 +8,20 @@ from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(layout="wide")
 
-st.title("🧠 AI TRADING BOT PRO — MULTI ASSET + GOLD + PORTFOLIO")
+st.title("🧠 AI TRADING BOT PRO — FIXED ARCHITECTURE")
 
 # ======================
-# ASSET
+# ASSETS SEPARATI
 # ======================
-asset = st.selectbox("Asset", ["BTCUSDT", "ETHUSDT", "GOLD (XAUUSD)"])
+asset = st.selectbox("Asset", ["BTCUSDT", "ETHUSDT", "GOLD"])
+
 timeframe = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h"])
 
 # ======================
-# DATA SOURCE
+# DATA FUNCTIONS (SEPARATE)
 # ======================
-def get_data(asset):
-
-    # GOLD separato (perché non è su Binance)
-    if asset == "GOLD (XAUUSD)":
-        url = "https://www.goldapi.io/api/XAU/USD"
-        headers = {"x-access-token": "demo"}  # fallback pubblico
-        return None  # fallback semplice (evita crash)
-
-    url = f"https://api.binance.com/api/v3/klines?symbol={asset}&interval={timeframe}&limit=1000"
+def get_crypto(symbol):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit=1000"
     data = requests.get(url).json()
 
     df = pd.DataFrame(data, columns=[
@@ -37,19 +31,53 @@ def get_data(asset):
 
     df["time"] = pd.to_datetime(df["time"], unit="ms")
 
-    for col in ["open","high","low","close","volume"]:
-        df[col] = df[col].astype(float)
+    for c in ["open","high","low","close"]:
+        df[c] = df[c].astype(float)
 
     return df
 
-df = get_data(asset)
 
+def get_gold():
+    # fallback vero (Yahoo finance proxy pubblico)
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=15m&range=7d"
+    r = requests.get(url).json()
+
+    try:
+        t = r["chart"]["result"][0]["timestamp"]
+        o = r["chart"]["result"][0]["indicators"]["quote"][0]
+
+        df = pd.DataFrame({
+            "time": pd.to_datetime(t, unit="s"),
+            "open": o["open"],
+            "high": o["high"],
+            "low": o["low"],
+            "close": o["close"]
+        })
+
+        df = df.dropna()
+        return df
+
+    except:
+        return pd.DataFrame()
+
+
+# ======================
+# SELECT DATA
+# ======================
+if asset in ["BTCUSDT", "ETHUSDT"]:
+    df = get_crypto(asset)
+else:
+    df = get_gold()
+
+# ======================
+# SAFETY CHECK (IMPORTANTISSIMO)
+# ======================
 if df is None or len(df) < 50:
-    st.warning("⚠️ GOLD in modalità semplificata o dati insufficienti")
+    st.error("❌ Dati insufficienti per questo asset/timeframe")
     st.stop()
 
 # ======================
-# INDICATORI
+# INDICATORS
 # ======================
 df["ma10"] = df["close"].rolling(10).mean()
 df["ma20"] = df["close"].rolling(20).mean()
@@ -59,26 +87,22 @@ macd = ta.trend.MACD(df["close"])
 df["macd"] = macd.macd()
 df["macd_signal"] = macd.macd_signal()
 
-# ======================
-# TARGET
-# ======================
 df["future"] = df["close"].shift(-1)
 df["target"] = (df["future"] > df["close"]).astype(int)
 
 features = ["ma10", "ma20", "rsi", "macd", "macd_signal"]
 
-df_ml = df[features + ["target"]].copy()
-df_ml = df_ml.ffill().bfill()
+df_ml = df[features + ["target"]].ffill().bfill()
 
+# ======================
+# MODEL SAFE
+# ======================
 df["signal"] = 0
 df["prob"] = 50
 
-# ======================
-# MODEL
-# ======================
-if len(df_ml) > 100:
+if len(df_ml) > 80:
 
-    model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42)
+    model = RandomForestClassifier(n_estimators=80, max_depth=6)
     model.fit(df_ml[features], df_ml["target"])
 
     df["signal"] = model.predict(df_ml[features])
@@ -89,45 +113,17 @@ else:
     df["prob"] = df["rsi"].fillna(50)
 
 # ======================
-# PORTFOLIO SIMULATO
+# OUTPUT SAFE
 # ======================
-capital = st.sidebar.number_input("💰 Capitale iniziale", value=1000)
+last_prob = float(df["prob"].dropna().iloc[-1])
+last_signal = int(df["signal"].dropna().iloc[-1])
 
-position = 0
-cash = capital
-equity = []
-
-for i in range(len(df)):
-    price = df["close"].iloc[i]
-    sig = df["signal"].iloc[i]
-
-    if sig == 1 and position == 0:
-        position = cash / price
-        cash = 0
-
-    elif sig == 0 and position > 0:
-        cash = position * price
-        position = 0
-
-    total = cash if position == 0 else position * price
-    equity.append(total)
-
-df["equity"] = equity
-
-# ======================
-# OUTPUT
-# ======================
-last_prob = float(df["prob"].iloc[-1])
-last_signal = int(df["signal"].iloc[-1])
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric("📈 Probabilità salita", f"{last_prob:.1f}%")
+col1, col2 = st.columns(2)
+col1.metric("📈 Probabilità", f"{last_prob:.1f}%")
 col2.metric("📊 Segnale", "🟢 BUY" if last_signal == 1 else "🔴 SELL")
-col3.metric("💰 Portfolio", f"{df['equity'].iloc[-1]:.2f}$")
 
 # ======================
-# GRAFICO CANDLE + FRECCE
+# GRAFICO
 # ======================
 fig = go.Figure()
 
@@ -144,34 +140,23 @@ sell = df[df["signal"] == 0]
 
 fig.add_trace(go.Scatter(
     x=buy["time"],
-    y=buy["low"] * 0.998,
-    mode="markers+text",
-    marker=dict(symbol="triangle-up", color="green", size=12),
-    text=["BUY"] * len(buy),
+    y=buy["low"],
+    mode="markers",
+    marker=dict(color="green", size=10, symbol="triangle-up"),
     name="BUY"
 ))
 
 fig.add_trace(go.Scatter(
     x=sell["time"],
-    y=sell["high"] * 1.002,
-    mode="markers+text",
-    marker=dict(symbol="triangle-down", color="red", size=12),
-    text=["SELL"] * len(sell),
+    y=sell["high"],
+    mode="markers",
+    marker=dict(color="red", size=10, symbol="triangle-down"),
     name="SELL"
 ))
 
-fig.update_layout(
-    height=700,
-    xaxis_rangeslider_visible=False
-)
+fig.update_layout(height=650, xaxis_rangeslider_visible=False)
 
 st.plotly_chart(fig, use_container_width=True)
-
-# ======================
-# EQUITY
-# ======================
-st.subheader("📊 Portfolio simulato")
-st.line_chart(df["equity"])
 
 # ======================
 # LEGGENDA
@@ -179,17 +164,11 @@ st.line_chart(df["equity"])
 st.markdown("""
 ## 📘 Legenda
 
-🟢 BUY → AI prevede salita  
-🔴 SELL → AI prevede discesa  
+🟢 BUY → salita probabile  
+🔴 SELL → discesa probabile  
 
-📈 Percentuale:
-- 50% neutro
-- >70% forte BUY
-- <30% forte SELL  
+🪙 BTC/ETH → Binance  
+🥇 GOLD → Yahoo Finance  
 
-💰 Portfolio:
-- simulazione investimento automatico
-
-🪙 Asset:
-- BTC, ETH, GOLD
+⚠️ Se dati insufficienti → blocco automatico
 """)
