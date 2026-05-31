@@ -13,12 +13,18 @@ symbol = st.selectbox("Scegli Crypto", ["BTCUSDT", "ETHUSDT"])
 
 # ===== DATI (CoinGecko) =====
 coin_id = "bitcoin" if symbol == "BTCUSDT" else "ethereum"
-url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=7"
-data = requests.get(url).json()
+from binance.client import Client
 
-prices = data["prices"]
-df = pd.DataFrame(prices, columns=["time", "price"])
-df["close"] = df["price"]
+client = Client("", "")  # senza API = solo dati
+
+klines = client.get_klines(symbol=symbol, interval="1m", limit=200)
+
+df = pd.DataFrame(klines, columns=[
+    "time","open","high","low","close","volume",
+    "close_time","qav","num_trades","taker_base","taker_quote","ignore"
+])
+
+df["close"] = df["close"].astype(float)
 
 # ===== INDICATORI =====
 df["ma20"] = df["close"].rolling(20).mean()
