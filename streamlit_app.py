@@ -8,15 +8,21 @@ st.title("🚀 Crypto Bot BTC + ETH")
 
 symbol = st.selectbox("Scegli crypto", ["BTCUSDT", "ETHUSDT"])
 
-url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit=200"
+# CoinGecko (NON SI BLOCCA)
+if symbol == "BTCUSDT":
+    coin_id = "bitcoin"
+else:
+    coin_id = "ethereum"
+
+url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart?vs_currency=usd&days=7"
+
 data = requests.get(url).json()
 
-df = pd.DataFrame(data, columns=[
-    "time","open","high","low","close","volume",
-    "close_time","qav","trades","tbbav","tbqav","ignore"
-])
+prices = data["prices"]
 
-df["close"] = df["close"].astype(float)
+df = pd.DataFrame(prices, columns=["time", "price"])
+df["price"] = df["price"].astype(float)
+df["close"] = df["price"]
 
 df["ma20"] = df["close"].rolling(20).mean()
 df["ma50"] = df["close"].rolling(50).mean()
